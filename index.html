@@ -1,0 +1,1361 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <title>gd</title>
+    <meta name="description" content="yuh">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link href="https://fonts.cdnfonts.com/css/pusab" rel="stylesheet">
+    <style>
+        /* Basic styles */
+        body {
+            margin: 0;
+            background: #111;
+            overflow: hidden;
+        }
+
+        canvas {
+            display: block;
+            margin: auto;
+            background: #000099;
+        }
+    </style>
+</head>
+
+<body>
+    <!-- Game canvas -->
+    <canvas id="game"></canvas>
+
+    <script>
+        /* Canvas Setup */
+        const canvas = document.getElementById("game");
+        const ctx = canvas.getContext("2d");
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+
+        window.addEventListener("resize", () => {
+            resizeCanvas();
+            resetPlayer();
+            paused = true;
+        });
+
+        /* Global Variables */
+        const baseTileSize = 40;
+        let TILE_SIZE = 40;
+        let SPIKE_HITBOX_SIZE = TILE_SIZE / 2;
+        let cameraX = 0;
+
+        let paused = false;
+        let input = { pressed: false };
+        let wasPressed = false;
+        let jumpBuffered = false;
+
+        // Sets to track activated modifiers
+        let activatedPads = new Set();
+        let activatedOrbs = new Set();
+        let activatedPortals = new Set();
+
+        let levelCompleted = false;
+
+        // Player properties and state
+        let player = {
+            x: 0,
+            y: 0,
+            prevX: 0,
+            width: TILE_SIZE,
+            height: TILE_SIZE,
+            velY: 0,
+            gravity: 0.6,
+            gravityState: 1,    // 1 = normal gravity, -1 = inverted gravity
+            jumpForce: -10.5,
+            grounded: false,
+            speed: 5.5,
+            rotation: 0,
+            rotationSpeed: Math.PI / 30,
+            gamemode: "cube",
+            dashing: false,
+            dashDirection: 1,
+            attempts: 0
+        };
+
+        /* Level Data */
+        const TILE_TYPES = {
+            "#": { solid: true },   // Solid block
+
+            // Hazards
+            "A": { hazard: true },
+            "^": { hazard: true },
+            "V": { hazard: true },
+            "v": { hazard: true },
+            "X": { hazard: true },
+
+            // Orbs
+            "y": { orb: true },
+            "m": { orb: true },
+            "r": { orb: true },
+            "b": { orb: true },
+            ">": { orb: true },
+
+            // Pads
+            "Y": { pad: true },
+            "M": { pad: true },
+            "R": { pad: true },
+            "B": { pad: true },
+
+            // Portals
+            ")": { portal: true, gravity: -1 },
+            "(": { portal: true, gravity: 1 },
+            "]": { portal: true, gamemode: "cube" },
+            "[": { portal: true, gamemode: "ship" },
+            "}": { portal: true, gamemode: "ball" },
+            "{": { portal: true, gamemode: "ufo" },
+            "@": { portal: true, gamemode: "wave" },
+            "0": { portal: true, gamemode: "swing" },
+
+            "$": { coin: true },    // Coin
+            "%": { attemptCount: true },    // Attempt counter
+            "E": { levelEnd: true }    // Level end
+        };
+
+        // Level layout
+        const levels = {
+            level1: {
+                layout: [
+                    ".............................#...........#..................#..........#XXXXXXXX#.........########################################################XXXX####........#......#########XXX######..........##..........##.........",
+                    ".............................#...........#..................#..........#XXXXXXV...........#########################.................V.......V............>......(###.....#.........$.....](..........##..........##.........",
+                    ".............................#.....A...A.#..................#..........#XXXXV...].........#######################....A.....A.....}......A.......A######.................###...A#######XXX###.........##..........##.........",
+                    ".............................#.....#####.#..................#..........#XXV...............#####V....V....vV....VV....V$...AVA.....################....#^^^^^^^^^#####........AV#############.........###.........##.........",
+                    ".............................#.....#b#b#.#..................#..........#V......A#.............V..........................AV.VA...............vVvV######VvvvvvvvvvvV##..#####.V.VVV...........].......vV###.......##.........",
+                    ".............................#.....#####.#..................#................AXX#........................................#...#.....................................vV............................A.....vV###.....##.........",
+                    ".............................#.....VvVvV.#..................#..........(...AXXXX#........................................B...B........[...................)..........................AAAAA..#########....vV###...##.........",
+                    ".............................#.....^A^A^.#..................#............AXXXXXX#......^A.B.........................................................................(.............^..Vv#vV..###########....vV###.##.........",
+                    ".............................#.....#####.#..................#..........#XXXXXXXX###############.....................................A^A^A^A^A^A^A^A^A######................^AAAA#.v....#....##......#####....vV####.........",
+                    ".............................#..X...###..#..................#..........#vvvvvvvv#.....................(...........y...........########################....#AAAAAAAAAA############......#....##......#######....vV##.........",
+                    ".............................#......###..#..................#..........#........#..........]..................y........b...b..vVvVvVvVv..............#....############..........#......#....##......###..####....vV.........",
+                    ".............................#.AAA..###..#.............................#......................M...........y..........................................#....#..........#..........#......#....##......###..######.............",
+                    ".............................#############..................)..........#........(.........#####...)..................................................#....#..........#..........#......#....##......###..##..####...R.......",
+                    ".......%................}.................................................................#...#......................................................#....#..........#..........#......#....##......###..##..########.......",
+                    "..........................@.....................y....{......#...................#.........#...#......................................................#....#..........#..........#......#....##......###..##..##..####.......",
+                    "......................#..........^A..................Y......#...................#.........#...#......................................................#....#..........#..........#......#....##......###..##..##..####.......",
+                    "..................#...#..##########.......r..........#......#..........#........#.........#...#......................................................#....#..........#..........#......#....##......###..##..##..####.......",
+                    "*......^A.....#...#...#..#........#AAAAAAAAAAAAAAAAAA#AAAAAA#AAAAAAAAAA#AAAAAAAA#AAAAAAAAA#...#AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA#....#..........#..........#......#....##......###..##..##..####A^A^A^A",
+                    "###############XXX#XXX######################################################################################################################################################################################################",
+                    "############################################################################################################################################################################################################################"
+                ],
+                song: new Audio("")     // Placeholder - COMING SOON
+            }
+        };
+
+        let currentLevelName = "level1";
+        let currentLevel = levels[currentLevelName];
+        currentLevel.song.loop = true;
+        currentLevel.song.volume = 0.5;
+
+        /* Level Helpers */
+        // Calculate tile size
+        function calculateTileSize() {
+            const scale = Math.min(window.innerWidth / 1280, window.innerHeight / 720); // scale relative to a base 1280x720 resolution
+            return baseTileSize * scale;
+        }
+
+        // Resize canvas and update player constants
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            TILE_SIZE = calculateTileSize();
+            updatePlayerConstants();
+        }
+
+        function updatePlayerConstants() {
+            player.width = TILE_SIZE;
+            player.height = TILE_SIZE;
+            player.speed = TILE_SIZE * 0.1375;      // 5.5/40 * TILE_SIZE
+            player.jumpForce = -TILE_SIZE * 0.2625; // -10.5/40 * TILE_SIZE
+            player.gravity = TILE_SIZE * 0.015;     // 0.6/40 * TILE_SIZE
+            SPIKE_HITBOX_SIZE = TILE_SIZE / 2;
+        }
+
+        // Get tile at col and row
+        function getTile(col, row) {
+            if (
+                row < 0 ||
+                row >= currentLevel.layout.length ||
+                col < 0 ||
+                col >= currentLevel.layout[0].length
+            ) return null;
+
+            return currentLevel.layout[row][col];
+        }
+
+        function tileKey(col, row) {
+            return col + "," + row;
+        }
+
+        // Find start position
+        function findStart() {
+            for (let row = 0; row < currentLevel.layout.length; row++) {
+                for (let col = 0; col < currentLevel.layout[row].length; col++) {
+                    if (currentLevel.layout[row][col] === "*") {
+                        player.x = col * TILE_SIZE;
+                        player.y = row * TILE_SIZE;
+                        return;
+                    }
+                }
+            }
+        }
+
+        // Reset player if out of bounds
+        function checkOutOfBounds() {
+            const levelHeight = currentLevel.layout.length * TILE_SIZE;
+
+            if (player.y + player.height < 0 || player.y > levelHeight) {
+                resetPlayer();
+                player.attempts += 1;
+                console.log("Player fell out of the level!");
+            }
+        }
+
+        // Tile property checks
+        function isSolid(tile) {
+            return TILE_TYPES[tile]?.solid;
+        }
+
+        function isHazard(tile) {
+            return TILE_TYPES[tile]?.hazard;
+        }
+
+        function isOrb(tile) {
+            return TILE_TYPES[tile]?.orb;
+        }
+
+        function isPad(tile) {
+            return TILE_TYPES[tile]?.pad;
+        }
+
+        function isPortal(tile) {
+            return TILE_TYPES[tile]?.portal;
+        }
+
+        function isLevelEnd(tile) {
+            return TILE_TYPES[tile]?.levelEnd;
+        }
+
+        function isAttemptCount(tile) {
+            return TILE_TYPES[tile]?.attemptCount;
+        }
+
+        function isSpecial(tile) {
+            return TILE_TYPES[tile]?.coin;
+        }
+
+        // Load level by name
+        function loadLevel(levelName) {
+            if (!levels[levelName]) return;
+
+            if (currentLevel?.song) {
+                currentLevel.song.pause();
+                currentLevel.song.currentTime = 0;
+            }
+
+            currentLevelName = levelName;
+            currentLevel = levels[levelName];
+            currentLevel.song.loop = true;
+            currentLevel.song.volume = 0.5;
+
+            paused = false;
+            levelCompleted = false;
+            cameraX = 0;
+            wasPressed = false;
+            jumpBuffered = false;
+
+            activatedPads.clear();
+            activatedOrbs.clear();
+            activatedPortals.clear();
+
+            player.gamemode = "cube";
+            player.velY = 0;
+            player.gravityState = 1;
+            player.rotation = 0;
+            player.grounded = false;
+
+            findStart();
+        }
+
+        /* Input Handling */
+        function setupInput() {
+            window.addEventListener("keydown", (e) => {
+                if (e.code === "Space" || e.code === "ArrowUp") {
+                    input.pressed = true;
+                }
+            });
+
+            window.addEventListener("keyup", (e) => {
+                if (e.code === "Space" || e.code === "ArrowUp") {
+                    input.pressed = false;
+                }
+            });
+
+            window.addEventListener("mousedown", () => input.pressed = true);
+            window.addEventListener("mouseup", () => input.pressed = false);
+
+            window.addEventListener("touchstart", (e) => {
+                e.preventDefault();
+                input.pressed = true;
+            }, { passive: false });
+
+            window.addEventListener("touchend", () => input.pressed = false);
+
+            // Controls for pause & reset
+            window.addEventListener("keydown", (e) => {
+                if (e.code === "KeyP" || e.code === "Escape") {
+                    togglePause();
+                }
+
+                if (e.code === "KeyR") {
+                    resetPlayer();
+                }
+
+                if (e.code === "Space" || e.code === "ArrowUp") {
+                    input.pressed = true;
+                }
+            });
+        }
+
+        /* Physics and Movement */
+        function applyPhysics() {
+            const justPressed = input.pressed && !wasPressed;
+            wasPressed = input.pressed;
+
+            // Buffer jump input
+            if (justPressed && !player.grounded) {
+                jumpBuffered = true;
+            }
+
+            // Stop dash
+            if (!input.pressed && player.dashing) {
+                player.dashing = false;
+            }
+
+            // Movement logic
+            if (player.gamemode === "cube") {
+                if (player.grounded && input.pressed) {
+                    player.velY = player.jumpForce * player.gravityState;
+                    jumpBuffered = false;
+                }
+            } else if (player.gamemode === "ball") {
+                if (justPressed && player.grounded) {
+                    player.gravityState *= -1;
+                    player.velY = 0;
+                }
+            } else if (player.gamemode === "ufo") {
+                if (justPressed) {
+                    player.velY = player.jumpForce * player.gravityState;
+                    jumpBuffered = false;
+                    player.grounded = false;
+                }
+            } else if (player.gamemode === "ship") {
+                const thrust = 0.45;
+                const gravity = 0.45;
+                const maxFall = 10;
+
+                if (input.pressed) {
+                    player.velY -= thrust * player.gravityState;
+                } else {
+                    player.velY += gravity * player.gravityState;
+                }
+
+                // Clamp vertical velocity
+                if (player.velY > maxFall) player.velY = maxFall;
+                if (player.velY < -maxFall) player.velY = -maxFall;
+
+                player.y += player.velY;
+            } else if (player.gamemode === "wave") {
+                const dx = player.speed;
+
+                const direction = input.pressed ? -1.25 : 1.25;
+
+                const dy = player.speed * direction * player.gravityState;
+
+                player.x += dx;
+                player.y += dy;
+
+                player.velY = dy;
+            } else if (player.gamemode === "swing") {
+                if (justPressed) {
+                    player.gravityState *= -1;
+                }
+            }
+
+            player.prevX = player.x;
+
+            if (player.gamemode !== "wave") {
+                if (player.dashing) {
+                    player.x += player.speed * player.dashDirection;
+                    player.velY = 0;
+                } else {
+                    player.x += player.speed;
+
+                    if (player.gamemode !== "ship") {
+                        player.velY += player.gravity * player.gravityState;
+                        player.y += player.velY;
+                    }
+                }
+            }
+
+            player.grounded = false;
+
+            // Rotate player
+            if (player.gamemode === "cube") {
+                if (!player.grounded) {
+                    player.rotation += player.rotationSpeed * player.gravityState;
+                }
+            } else if (player.gamemode === "ball") {
+                player.rotation += (player.speed / TILE_SIZE) * -1.5 * Math.PI * player.gravityState;
+            } else if (player.gamemode === "ufo") {
+                player.rotation = 0;
+            }
+        }
+
+        /* Collision Handling */
+        function handleCollisions() {
+            // Calculate tile boundaries
+            const leftCol = Math.floor(player.x / TILE_SIZE);
+            const rightCol = Math.floor((player.x + player.width - 1) / TILE_SIZE);
+            const topRow = Math.floor(player.y / TILE_SIZE);
+            const bottomRow = Math.floor((player.y + player.height) / TILE_SIZE);
+
+            // Check overlapping tiles
+            for (let row = topRow; row <= bottomRow; row++) {
+                for (let col = leftCol; col <= rightCol; col++) {
+                    const tile = getTile(col, row);
+                    if (!tile) continue;
+
+                    const tileX = col * TILE_SIZE;
+                    const tileY = row * TILE_SIZE;
+
+                    // Handle collision for solid tiles
+                    if (isSolid(tile)) {
+                        if (player.gamemode === "wave") {
+                            if (player.velY > 0) {
+                                player.y = tileY - player.height;
+                            } else if (player.velY < 0) {
+                                player.y = tileY + TILE_SIZE;
+                            }
+                            return;
+                        }
+
+                        // Normal Gravity
+                        if (player.gravityState === 1) {
+                            if (player.velY > 0 && player.y + player.height > tileY && player.y < tileY) {
+                                player.y = tileY - player.height;
+                                player.velY = 0;
+                                player.grounded = true;
+
+                                if (player.gamemode === "cube") {
+                                    player.rotation = Math.round(player.rotation / (Math.PI / 2)) * (Math.PI / 2);
+                                }
+                            } else if (player.velY < 0 && player.y < tileY + TILE_SIZE) {
+                                player.y = tileY + TILE_SIZE;
+                                player.velY = 0;
+                            }
+                        } else {
+                            // Inverted gravity
+                            if (player.velY < 0 && player.y < tileY + TILE_SIZE && player.y + player.height > tileY + TILE_SIZE) {
+                                player.y = tileY + TILE_SIZE;
+                                player.velY = 0;
+                                player.grounded = true;
+
+                                if (player.gamemode === "cube") {
+                                    player.rotation = Math.round(player.rotation / (Math.PI / 2)) * (Math.PI / 2);
+                                }
+                            } else if (player.velY > 0 && player.y + player.height > tileY) {
+                                player.y = tileY - player.height;
+                                player.velY = 0;
+                            }
+                        }
+                    }
+
+                    // Hazard collision
+                    if (isHazard(tile) && checkSpikeCollision(tileX, tileY)) {
+                        resetPlayer();
+                        player.attempts += 1;
+                        console.log("Hit hazard at (" + col + ", " + row + ")");
+                    }
+
+                    // Pads
+                    if (isPad(tile)) {
+                        if (player.gamemode === "wave") {
+                            if (tile !== "B") return;
+                        }
+
+                        const key = tileKey(col, row);
+                        const tileAbove = getTile(col, row - 1);
+                        const flipped = isSolid(tileAbove);
+                        const padHeight = TILE_SIZE / 3;
+
+                        // Calculate pad collision area
+                        let padX = tileX;
+                        let padY = flipped ? tileY : tileY + TILE_SIZE - padHeight;
+
+                        // Check if player is touching pad
+                        const touching =
+                            player.x < padX + TILE_SIZE &&
+                            player.x + player.width > padX &&
+                            player.y + player.height > padY &&
+                            player.y < padY + padHeight;
+
+                        if (touching && !activatedPads.has(key)) {
+                            activatedPads.add(key);
+
+                            // Set velocity
+                            if (tile === "Y") {
+                                player.velY = player.jumpForce * 1.42 * player.gravityState;
+                            } else if (tile === "M") {
+                                player.velY = player.jumpForce * 0.95 * player.gravityState;
+                            } else if (tile === "R") {
+                                player.velY = player.jumpForce * 1.9 * player.gravityState;
+                            } else if (tile === "B") {
+                                player.velY = player.jumpForce * 0.47 * player.gravityState;
+                                player.gravityState *= -1;
+                            }
+
+                            player.grounded = false;
+                            return;
+                        }
+
+                        if (!touching) {
+                            activatedPads.delete(key);
+                        }
+                    }
+
+                    // Orbs
+                    if (isOrb(tile)) {
+                        if (player.gamemode === "wave") {
+                            if (tile !== "b" && tile !== ">") return;
+                        }
+
+                        const key = tileKey(col, row);
+
+                        if (isCollidingWithTile(tileX, tileY)) {
+                            if ((input.pressed || jumpBuffered) && !activatedOrbs.has(key)) {
+                                activatedOrbs.add(key);
+
+                                // Set velocity
+                                if (tile === "y") {
+                                    player.velY = player.jumpForce * player.gravityState;
+                                } else if (tile === "m") {
+                                    player.velY = player.jumpForce * player.gravityState * 0.7;
+                                } else if (tile === "r") {
+                                    player.velY = player.jumpForce * player.gravityState * 1.5;
+                                } else if (tile === "b") {
+                                    player.velY = player.jumpForce * 0.47 * player.gravityState;
+                                    player.gravityState *= -1;
+                                } else if (tile === ">") {
+                                    player.dashing = true;
+                                    player.dashDirection = 1;
+                                    player.velY = 0;
+                                }
+
+                                jumpBuffered = false;
+                            }
+                        } else {
+                            activatedOrbs.delete(key);
+                        }
+                    }
+
+                    // Level end
+                    if (isLevelEnd(tile)) {
+                        const key = tileKey(col, row);
+
+                        if (isCollidingWithTile(tileX, tileY)) {
+                            if ((input.pressed || jumpBuffered) && !activatedOrbs.has(key)) {
+                                jumpBuffered = false;
+                                completeLevel();
+                            }
+                        } else {
+                            activatedOrbs.delete(key);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Portals
+        function handlePortals() {
+            // Extend checking area for portals
+            const portalTop = player.y - TILE_SIZE;
+            const portalBottom = player.y + player.height + TILE_SIZE;
+
+            const startCol = Math.floor(player.x / TILE_SIZE);
+            const endCol = Math.floor((player.x + player.width) / TILE_SIZE);
+            const startRow = Math.floor(portalTop / TILE_SIZE);
+            const endRow = Math.floor(portalBottom / TILE_SIZE);
+
+            for (let row = startRow; row <= endRow; row++) {
+                for (let col = startCol; col <= endCol; col++) {
+                    const tile = getTile(col, row);
+                    if (!isPortal(tile)) continue;
+
+                    const key = tileKey(col, row);
+
+                    const portalX = col * TILE_SIZE;
+                    const portalY = row * TILE_SIZE - TILE_SIZE / 2;
+                    const portalWidth = TILE_SIZE;
+                    const portalHeight = TILE_SIZE * 2;
+
+                    const touching = isCollidingWithTile(portalX, portalY, portalWidth, portalHeight);
+
+                    if (touching) {
+                        if (!activatedPortals.has(key)) {
+                            activatedPortals.add(key);
+
+                            const portal = TILE_TYPES[tile];
+
+                            player.rotation = 0;
+                            if (portal.gravity !== undefined) {
+                                player.gravityState = portal.gravity;
+                                player.dashing = false;
+                            }
+
+                            if (portal.gamemode) {
+                                player.gamemode = portal.gamemode;
+                            }
+                        }
+                    } else {
+                        activatedPortals.delete(key);
+                    }
+                }
+            }
+        }
+
+        // Check if player collides with hazard
+        function checkSpikeCollision(tileX, tileY) {
+            const hitboxX = tileX + (TILE_SIZE - SPIKE_HITBOX_SIZE) / 2;
+            const hitboxY = tileY + (TILE_SIZE - SPIKE_HITBOX_SIZE) / 2;
+
+            return player.x < hitboxX + SPIKE_HITBOX_SIZE &&
+                player.x + player.width > hitboxX &&
+                player.y < hitboxY + SPIKE_HITBOX_SIZE &&
+                player.y + player.height > hitboxY;
+        }
+
+        // General colliding check
+        function isCollidingWithTile(tileX, tileY, tileWidth = TILE_SIZE, tileHeight = TILE_SIZE) {
+            return player.x < tileX + tileWidth &&
+                player.x + player.width > tileX &&
+                player.y < tileY + tileHeight &&
+                player.y + player.height > tileY;
+        }
+
+        // Check if player is inside a solid tile
+        function checkBlockCrush() {
+            const col = Math.floor((player.x + player.width / 2) / TILE_SIZE);
+            const row = Math.floor((player.y + player.height / 2) / TILE_SIZE);
+
+            const tile = getTile(col, row);
+
+            if (isSolid(tile)) {
+                resetPlayer();
+                player.attempts += 1;
+                console.log("Crushed inside block at (" + col + ", " + row + ")");
+            }
+        }
+
+        /* Camera, Progress Bar, & Rendering*/
+        // Update camera position
+        function updateCamera() {
+            const levelWidth = currentLevel.layout[0].length * TILE_SIZE;
+            const maxCameraX = Math.max(0, levelWidth - canvas.width);
+
+            const targetX = player.x - canvas.width / 4;
+            const clampedTargetX = Math.max(0, Math.min(targetX, maxCameraX));
+
+            if (clampedTargetX > cameraX) {
+                cameraX += (clampedTargetX - cameraX) * 0.1;
+            } else {
+                cameraX = clampedTargetX;
+            }
+        }
+
+        // Get player progress
+        function getProgress() {
+            const levelWidth = currentLevel.layout[0].length * TILE_SIZE;
+            return Math.min(player.x / levelWidth, 1);
+        }
+
+        // Draw progress bar
+        function drawProgressBar() {
+            const progress = getProgress();
+
+            const barWidth = canvas.width * 0.6;
+            const barHeight = 10;
+
+            const x = (canvas.width - barWidth) / 2;
+            const y = 20;
+
+            ctx.fillStyle = "rgba(255,255,255,0.2)";
+            ctx.fillRect(x, y, barWidth, barHeight);
+
+            // Fill progress
+            if (!levelCompleted) {
+                ctx.fillStyle = "lime";
+            } else {
+                ctx.fillStyle = "gold";
+            }
+            ctx.fillRect(x, y, barWidth * progress, barHeight);
+
+            // Bar outline
+            ctx.strokeStyle = "white";
+            ctx.lineWidth = 2;
+            ctx.strokeRect(x, y, barWidth, barHeight);
+
+            // Percentage
+            ctx.font = "16px Arial";
+            ctx.textAlign = "center";
+            if (!levelCompleted) {
+                ctx.fillStyle = "white";
+                ctx.fillText(Math.floor(progress * 100) + "%", canvas.width / 2, y + 25);
+            } else {
+                ctx.fillStyle = "gold";
+                ctx.fillText("100%", canvas.width / 2, y + 25);
+            }
+        }
+
+        // Main render function
+        function render() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            drawLevel();
+
+            if (!levelCompleted) {
+                drawPlayer();
+            }
+
+            drawProgressBar();
+
+            // Draw level complete overlay
+            if (levelCompleted) {
+                ctx.fillStyle = "rgba(0,0,0,0.5)";
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                ctx.fillStyle = "lime";
+                ctx.font = "60px Pusab";
+                ctx.textAlign = "center";
+
+                ctx.fillText("Level Complete!", canvas.width / 2, canvas.height / 2);
+            }
+
+            // Draw paused overlay
+            if (paused && !levelCompleted) {
+                ctx.fillStyle = "rgba(0,0,0,0.5)";
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                ctx.fillStyle = "white";
+                ctx.font = "48px Pusab";
+                ctx.textAlign = "center";
+
+                ctx.fillText("Game Paused", canvas.width / 2, canvas.height / 2);
+            }
+        }
+
+        /* Drawing Functions */
+        // Draw tiles within camera view
+        function drawLevel() {
+            const startCol = Math.floor(cameraX / TILE_SIZE);
+            const endCol = startCol + Math.ceil(canvas.width / TILE_SIZE) + 1;
+
+            for (let row = 0; row < currentLevel.layout.length; row++) {
+                for (let col = startCol; col < endCol; col++) {
+                    const tile = getTile(col, row);
+                    if (!tile) continue;
+
+                    const x = col * TILE_SIZE - cameraX;
+                    const y = row * TILE_SIZE;
+
+                    if (isSolid(tile)) drawSolid(tile, x, y);
+                    if (isHazard(tile)) drawHazard(tile, x, y);
+                    if (isOrb(tile)) drawOrb(tile, x, y);
+                    if (isPad(tile)) drawPad(tile, x, y, col, row);
+                    if (isPortal(tile)) drawPortal(tile, x, y);
+                    if (isLevelEnd(tile)) drawEnd(tile, x, y);
+                    if (isSpecial(tile)) drawSpecial(tile, x, y);
+                    if (isAttemptCount(tile)) drawAttemptsCounter(tile, x, y);
+                }
+            }
+        }
+
+        // Draw player sprite
+        function drawPlayer() {
+            const drawX = player.x - cameraX + player.width / 2;
+            const drawY = player.y + player.height / 2;
+
+            ctx.save();
+            ctx.translate(drawX, drawY);
+
+            // Dash "fire"
+            if (player.dashing) {
+                ctx.strokeStyle = "cyan";
+                ctx.lineWidth = 5;
+                ctx.beginPath();
+                ctx.arc(0, 0, player.width * (2 / 3), 0, Math.PI * 2);
+                ctx.stroke();
+            }
+
+            // Draw player
+            if (player.gamemode === "cube") {
+                drawCube();
+            } else if (player.gamemode === "ship") {
+                drawShip();
+            } else if (player.gamemode === "ball") {
+                drawBall();
+            } else if (player.gamemode === "ufo") {
+                drawUFO();
+            } else if (player.gamemode === "wave") {
+                drawWave();
+            } else if (player.gamemode === "swing") {
+                drawSwing();
+            }
+
+            ctx.restore();
+        }
+
+        function drawCube() {
+            ctx.rotate(player.rotation);
+
+            ctx.fillStyle = "lime";
+            ctx.fillRect(-player.width / 2, -player.height / 2, player.width, player.height);
+            ctx.strokeStyle = "black";
+            ctx.lineWidth = 3;
+            ctx.strokeRect(-player.width / 2, -player.height / 2, player.width, player.height);
+            ctx.fillStyle = "cyan";
+            ctx.fillRect(-player.width / 4, -player.height / 4, player.width / 2, player.height / 2);
+            ctx.strokeRect(-player.width / 4, -player.height / 4, player.width / 2, player.height / 2);
+        }
+
+        function drawShip() {
+            ctx.rotate(player.velY * 0.1); // tilt
+
+            ctx.fillStyle = "cyan";
+            ctx.strokeStyle = "black";
+            ctx.lineWidth = 2;
+            if (player.gravityState === 1) {
+                ctx.fillRect(-player.width / 3, -player.height / 2, player.width / 2, player.height / 2);
+                ctx.strokeRect(-player.width / 3, -player.height / 2, player.width / 2, player.height / 2);
+                ctx.fillStyle = "magenta";
+                ctx.lineWidth = 3;
+                ctx.fillRect(-player.width / 2, 0, player.width, player.height / 2);
+                ctx.strokeRect(-player.width / 2, 0, player.width, player.height / 2);
+            } else {
+                ctx.fillRect(-player.width / 3, 0, player.width / 2, player.height / 2);
+                ctx.strokeRect(-player.width / 3, 0, player.width / 2, player.height / 2);
+                ctx.fillStyle = "magenta";
+                ctx.lineWidth = 3;
+                ctx.fillRect(-player.width / 2, -player.height / 2, player.width, player.height / 2);
+                ctx.strokeRect(-player.width / 2, -player.height / 2, player.width, player.height / 2);
+            }
+        }
+
+        function drawBall() {
+            ctx.rotate(player.rotation);
+
+            ctx.fillStyle = "red";
+            ctx.beginPath();
+            const size = TILE_SIZE / 2;
+            ctx.moveTo(0, size);
+            ctx.lineTo(0, size / 2);
+            ctx.lineTo(size / 1.5, size / 1.5);
+            ctx.lineTo(size / 3, size / 3);
+            ctx.lineTo(size, 0);
+            ctx.lineTo(size / 2, 0);
+            ctx.lineTo(size / 1.5, -size / 1.5);
+            ctx.lineTo(size / 3, -size / 3);
+            ctx.lineTo(0, -size);
+            ctx.lineTo(0, -size / 2);
+            ctx.lineTo(-size / 1.5, -size / 1.5);
+            ctx.lineTo(-size / 3, -size / 3);
+            ctx.lineTo(-size, 0);
+            ctx.lineTo(-size / 2, 0);
+            ctx.lineTo(-size / 1.5, size / 1.5);
+            ctx.lineTo(-size / 3, size / 3);
+            ctx.closePath();
+            ctx.fill();
+
+            ctx.strokeStyle = "black";
+            ctx.lineWidth = 1;
+            ctx.stroke();
+
+            ctx.fillStyle = "cyan";
+            ctx.beginPath();
+            ctx.arc(0, 0, size / 3.5, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.beginPath();
+            ctx.arc(0, 0, size / 3.5, 0, Math.PI * 2);
+            ctx.stroke();
+        }
+
+        function drawUFO() {
+            ctx.fillStyle = "orange";
+            ctx.strokeStyle = "black";
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            if (player.gravityState === 1) {
+                ctx.ellipse(0, TILE_SIZE / 4, TILE_SIZE / 2, TILE_SIZE / 3, 0, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.beginPath();
+                ctx.ellipse(0, TILE_SIZE / 4, TILE_SIZE / 2, TILE_SIZE / 3, 0, 0, Math.PI * 2);
+                ctx.stroke();
+
+                ctx.fillStyle = "cyan";
+                ctx.beginPath();
+                ctx.arc(0, -TILE_SIZE / 5, TILE_SIZE / 5, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.beginPath();
+                ctx.arc(0, -TILE_SIZE / 5, TILE_SIZE / 5, 0, Math.PI * 2);
+                ctx.stroke();
+            } else {
+                ctx.ellipse(0, -TILE_SIZE / 4, TILE_SIZE / 2, TILE_SIZE / 3, 0, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.beginPath();
+                ctx.ellipse(0, -TILE_SIZE / 4, TILE_SIZE / 2, TILE_SIZE / 3, 0, 0, Math.PI * 2);
+                ctx.stroke();
+
+                ctx.fillStyle = "cyan";
+                ctx.beginPath();
+                ctx.arc(0, TILE_SIZE / 5, TILE_SIZE / 5, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.beginPath();
+                ctx.arc(0, TILE_SIZE / 5, TILE_SIZE / 5, 0, Math.PI * 2);
+                ctx.stroke();
+            }
+        }
+
+        function drawWave() {   // WIP
+            ctx.rotate(player.velY); // tilt
+
+            ctx.fillStyle = "cyan";
+            ctx.strokeStyle = "black";
+            ctx.lineWidth = 2;
+            ctx.moveTo(-player.width / 2, -player.height / 2);
+            ctx.lineTo(player.width / 2, 0);
+            ctx.lineTo(-player.width / 2, player.height / 2);
+            ctx.lineTo
+            ctx.closePath();
+            ctx.fill();
+        }
+
+        function drawSwing() {  // WIP
+            ctx.rotate(player.velY * 0.1); // tilt
+
+            ctx.fillStyle = "cyan";
+            ctx.strokeStyle = "black";
+            ctx.lineWidth = 2;
+            if (player.gravityState === 1) {
+                ctx.fillRect(-player.width / 3, -player.height / 2, player.width / 2, player.height / 2);
+                ctx.strokeRect(-player.width / 3, -player.height / 2, player.width / 2, player.height / 2);
+                ctx.fillStyle = "yellow";
+                ctx.lineWidth = 3;
+                ctx.fillRect(-player.width / 2, 0, player.width, player.height / 2);
+                ctx.strokeRect(-player.width / 2, 0, player.width, player.height / 2);
+            } else {
+                ctx.fillRect(-player.width / 3, 0, player.width / 2, player.height / 2);
+                ctx.strokeRect(-player.width / 3, 0, player.width / 2, player.height / 2);
+                ctx.fillStyle = "yellow";
+                ctx.lineWidth = 3;
+                ctx.fillRect(-player.width / 2, -player.height / 2, player.width, player.height / 2);
+                ctx.strokeRect(-player.width / 2, -player.height / 2, player.width, player.height / 2);
+            }
+        }
+
+        // Draw solid blocks
+        function drawSolid(tile, x, y) {
+            ctx.save();
+            ctx.fillStyle = "grey";
+            ctx.strokeStyle = "black";
+            ctx.lineWidth = 3;
+            ctx.fillRect(x, y, TILE_SIZE, TILE_SIZE);
+            ctx.strokeRect(x, y, TILE_SIZE, TILE_SIZE);
+            ctx.restore();
+        }
+
+        // Draw hazards
+        function drawHazard(tile, x, y) {
+            ctx.save();
+            ctx.fillStyle = "red";
+            ctx.strokeStyle = "black";
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+
+            if (tile === "A") {
+                // Spike up
+                ctx.moveTo(x, y + TILE_SIZE);
+                ctx.lineTo(x + TILE_SIZE / 2, y);
+                ctx.lineTo(x + TILE_SIZE, y + TILE_SIZE);
+                ctx.closePath();
+                ctx.fill();
+                ctx.stroke();
+            } else if (tile === "^") {
+                // Half spike up
+                ctx.moveTo(x, y + TILE_SIZE);
+                ctx.lineTo(x + TILE_SIZE / 2, y + TILE_SIZE / 2);
+                ctx.lineTo(x + TILE_SIZE, y + TILE_SIZE);
+                ctx.closePath();
+                ctx.fill();
+                ctx.stroke();
+            } else if (tile === "V") {
+                // Spike down
+                ctx.moveTo(x, y);
+                ctx.lineTo(x + TILE_SIZE / 2, y + TILE_SIZE);
+                ctx.lineTo(x + TILE_SIZE, y);
+                ctx.closePath();
+                ctx.fill();
+                ctx.stroke();
+            } else if (tile === "v") {
+                // Small spike down
+                ctx.moveTo(x, y);
+                ctx.lineTo(x + TILE_SIZE / 2, y + TILE_SIZE / 2);
+                ctx.lineTo(x + TILE_SIZE, y);
+                ctx.closePath();
+                ctx.fill();
+                ctx.stroke();
+            } else if (tile === "X") {
+                // Hazard block
+                ctx.moveTo(x, y + TILE_SIZE);
+                ctx.lineTo(x + TILE_SIZE, y + TILE_SIZE);
+                ctx.lineTo(x + TILE_SIZE, y);
+                ctx.lineTo(x, y);
+                ctx.closePath();
+                ctx.fill();
+            }
+            ctx.restore();
+        }
+
+        // Draw orbs
+        function drawOrb(tile, x, y) {
+            ctx.save();
+            if (tile === ">") {
+                // Dash orb
+                const height = TILE_SIZE * (Math.sqrt(3) / 2);
+                const xOffset = (TILE_SIZE - height) / 2;
+
+                ctx.fillStyle = "lime";
+                ctx.strokeStyle = "white";
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.arc(x + TILE_SIZE / 2, y + TILE_SIZE / 2, TILE_SIZE / 2, 0, 2 * Math.PI);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(x + xOffset, y);
+                ctx.lineTo(x + xOffset, y + TILE_SIZE);
+                ctx.lineTo(x + xOffset + height, y + TILE_SIZE / 2);
+                ctx.closePath();
+                ctx.fill();
+                ctx.beginPath();
+                ctx.moveTo(x + xOffset, y);
+                ctx.lineTo(x + xOffset, y + TILE_SIZE);
+                ctx.lineTo(x + xOffset + height, y + TILE_SIZE / 2);
+                ctx.closePath();
+                ctx.stroke();
+            } else {
+                // Other orbs
+                if (tile === "y") {
+                    ctx.fillStyle = "yellow";
+                } else if (tile === "m") {
+                    ctx.fillStyle = "magenta";
+                } else if (tile === "r") {
+                    ctx.fillStyle = "red";
+                } else if (tile === "b") {
+                    ctx.fillStyle = "cyan";
+                }
+                ctx.beginPath();
+                ctx.arc(x + TILE_SIZE / 2, y + TILE_SIZE / 2, TILE_SIZE / 3, 0, 2 * Math.PI);
+                ctx.fill();
+                ctx.beginPath();
+                ctx.strokeStyle = "white";
+                ctx.lineWidth = 3;
+                ctx.arc(x + TILE_SIZE / 2, y + TILE_SIZE / 2, TILE_SIZE / 2, 0, 2 * Math.PI);
+                ctx.stroke();
+            }
+            ctx.restore();
+        }
+
+        // Draw pads
+        function drawPad(tile, x, y, col, row) {
+            ctx.save();
+
+            // If statement checks if tile above pad is solid
+            // Maybe find a way that doesn't require multiple checks?
+
+            if (tile === "Y") {
+                const tileAbove = getTile(col, row - 1);
+
+                if (isSolid(tileAbove)) {
+                    ctx.translate(x + TILE_SIZE / 2, y + TILE_SIZE / 2);
+                    ctx.scale(1, -1);
+                    ctx.translate(-(x + TILE_SIZE / 2), -(y + TILE_SIZE / 2));
+                }
+
+                ctx.fillStyle = "yellow";
+            } else if (tile === "M") {
+                const tileAbove = getTile(col, row - 1);
+
+                if (isSolid(tileAbove)) {
+                    ctx.translate(x + TILE_SIZE / 2, y + TILE_SIZE / 2);
+                    ctx.scale(1, -1);
+                    ctx.translate(-(x + TILE_SIZE / 2), -(y + TILE_SIZE / 2));
+                }
+
+                ctx.fillStyle = "magenta";
+            } else if (tile === "R") {
+                const tileAbove = getTile(col, row - 1);
+
+                if (isSolid(tileAbove)) {
+                    ctx.translate(x + TILE_SIZE / 2, y + TILE_SIZE / 2);
+                    ctx.scale(1, -1);
+                    ctx.translate(-(x + TILE_SIZE / 2), -(y + TILE_SIZE / 2));
+                }
+
+                ctx.fillStyle = "red";
+            } else if (tile === "B") {
+                const tileAbove = getTile(col, row - 1);
+
+                if (isSolid(tileAbove)) {
+                    ctx.translate(x + TILE_SIZE / 2, y + TILE_SIZE / 2);
+                    ctx.scale(1, -1);
+                    ctx.translate(-(x + TILE_SIZE / 2), -(y + TILE_SIZE / 2));
+                }
+
+                ctx.fillStyle = "cyan";
+            }
+            const padHeight = TILE_SIZE / 3;
+            ctx.fillRect(x, y + TILE_SIZE - padHeight, TILE_SIZE, padHeight);
+            ctx.restore();
+        }
+
+        // Draw portals
+        function drawPortal(tile, x, y) {
+            ctx.save();
+
+            let color = "";
+            let centerColor = "";
+            if (tile === ")") {
+                color = "yellow";
+                centerColor = "gold";
+            } else if (tile === "(") {
+                color = "blue";
+                centerColor = "darkblue";
+            } else if (tile === "]") {
+                color = "lime";
+                centerColor = "green";
+            } else if (tile === "[") {
+                color = "magenta";
+                centerColor = "darkmagenta";
+            } else if (tile === "}") {
+                color = "red";
+                centerColor = "darkred";
+            } else if (tile === "{") {
+                color = "orange";
+                centerColor = "darkorange";
+            } else if (tile === "@") {
+                color = "cyan";
+                centerColor = "turquoise";
+            } else if (tile === "0") {
+                color = "gold";
+                centerColor = "#AA6C39";
+            }
+
+            const portalY = y - TILE_SIZE / 2;
+            const portalWidth = TILE_SIZE;
+            const portalHeight = TILE_SIZE * 2;
+
+            const centerX = x
+            const centerY = portalY + portalHeight / 2;
+            const radius = portalHeight / 2;
+
+            // Base
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, radius, -Math.PI / 2, Math.PI / 2);
+            ctx.closePath();
+            ctx.fill();
+
+            // Outline
+            ctx.strokeStyle = "black";
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, radius, -Math.PI / 2, Math.PI / 2);
+            ctx.closePath();
+            ctx.stroke();
+
+            // Center
+            ctx.fillStyle = centerColor;
+            ctx.fillRect(centerX, centerY - radius, portalWidth / 4, portalHeight);
+            ctx.strokeRect(centerX, centerY - radius, portalWidth / 4, portalHeight);
+
+            ctx.restore();
+        }
+
+        // Draw level end orb
+        function drawEnd(tile, x, y) {
+            ctx.save();
+            const gradient = ctx.createRadialGradient(
+                x + TILE_SIZE / 2,
+                y + TILE_SIZE / 2,
+                5,
+                x + TILE_SIZE / 2,
+                y + TILE_SIZE / 2,
+                TILE_SIZE
+            );
+
+            gradient.addColorStop(0, "orange");
+            gradient.addColorStop(1, "transparent");
+
+            ctx.fillStyle = gradient;
+            ctx.beginPath();
+            ctx.arc(x + TILE_SIZE / 2, y + TILE_SIZE / 2, TILE_SIZE, 0, 2 * Math.PI);
+            ctx.fill();
+
+            ctx.fillStyle = "orange";
+            ctx.beginPath();
+            ctx.arc(x + TILE_SIZE / 2, y + TILE_SIZE / 2, TILE_SIZE / 3, 0, 2 * Math.PI);
+            ctx.fill();
+
+            ctx.strokeStyle = "white";
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.arc(x + TILE_SIZE / 2, y + TILE_SIZE / 2, TILE_SIZE / 2, 0, 2 * Math.PI);
+            ctx.stroke();
+
+            ctx.restore();
+        }
+
+        // Draw attempt counter
+        function drawAttemptsCounter(tile, x, y) {
+            ctx.save();
+
+            const fontSize = TILE_SIZE * 0.75;
+
+            ctx.font = fontSize + "px Pusab";
+            ctx.fillStyle = "white";
+            ctx.textAlign = "right";
+            ctx.fillText("Attempts: " + player.attempts, x, y);
+            ctx.restore();
+        }
+
+        // Draw special tiles (currently just coins)
+        function drawSpecial(tile, x, y) {
+            ctx.save();
+            if (tile === "$") {
+                ctx.fillStyle = "gold";
+                ctx.strokeStyle = "black";
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.arc(x + TILE_SIZE / 2, y + TILE_SIZE / 2, TILE_SIZE / 3, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.beginPath();
+                ctx.arc(x + TILE_SIZE / 2, y + TILE_SIZE / 2, TILE_SIZE / 3, 0, Math.PI * 2);
+                ctx.stroke();
+            }
+            ctx.restore();
+        }
+
+        /* Game Update Loop */
+        // Update game state
+        function update() {
+            if (paused) return;
+
+            applyPhysics();
+            handleCollisions();
+            handlePortals();
+            checkBlockCrush();
+            checkOutOfBounds();
+            updateCamera();
+            checkLevelComplete();
+        }
+
+        /* Reset, Loop, Complete, Pause, Init */
+        // Reset player to start
+        function resetPlayer() {
+            updatePlayerConstants();
+
+            levelCompleted = false;
+            paused = false;
+            cameraX = 0;
+            player.velY = 0;
+            player.gravityState = 1;
+            player.rotation = 0;
+            player.gamemode = "cube";
+            player.grounded = false;
+            jumpBuffered = false;
+            wasPressed = false;
+
+            activatedPads.clear();
+            activatedOrbs.clear();
+            activatedPortals.clear();
+
+            findStart();
+
+            currentLevel.song.currentTime = 0;
+            if (!paused) {
+                currentLevel.song.play().catch(() => { });
+            }
+
+            console.log("Player reset");
+        }
+
+        // The main game loop
+        function gameLoop() {
+            update();
+            render();
+            requestAnimationFrame(gameLoop);
+        }
+
+        // Check if player has reached end of level
+        function checkLevelComplete() {
+            const levelWidth = currentLevel.layout[0].length * TILE_SIZE;
+
+            if (player.x > levelWidth - TILE_SIZE / 2) {
+                completeLevel();
+            }
+        }
+
+        // Complete level handler
+        function completeLevel() {
+            if (levelCompleted) return;
+
+            levelCompleted = true;
+            paused = true;
+
+            currentLevel.song.pause();
+
+            console.log("Level Complete!");
+        }
+
+        // Toggle game pause
+        function togglePause() {
+            paused = !paused;
+
+            if (paused) {
+                currentLevel.song.pause();
+                console.log("Game paused");
+            } else {
+                currentLevel.song.play().catch(() => { });
+                console.log("Game unpaused");
+            }
+        }
+
+        // Initialize
+        function init() {
+            setupInput();
+            loadLevel("level1");
+            gameLoop();
+            currentLevel.song.play().catch(() => { });
+            console.log("Game initialized");
+        }
+        init();
+    </script>
+</body>
+
+</html>
